@@ -111,7 +111,10 @@ class OzonAPI:
         logger.info(f"Получение данных поставки {supply_id}")
 
         endpoint = '/v1/supply-order/bundle'
-        data = {'supply_id': supply_id}
+        data = {
+            'bundle_ids': [str(supply_id)],
+            'limit': 100
+        }
 
         try:
             result = self._make_request('POST', endpoint, data)
@@ -208,12 +211,13 @@ class OzonAPI:
         """
         try:
             # Пробуем получить список поставок (любой endpoint для проверки)
-            endpoint = '/v1/supply-order/list'
+            endpoint = '/v3/supply-order/list'
             data = {
-                'dir': 'ASC',
                 'filter': {},
                 'limit': 1,
-                'offset': 0
+                'last_id': None,
+                'sort_by': 'ORDER_CREATION',
+                'sort_dir': 'DESC'
             }
 
             self._make_request('POST', endpoint, data)
