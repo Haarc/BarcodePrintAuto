@@ -38,7 +38,7 @@ class OzonBarcodeGUI:
         self.root.resizable(True, True)
 
         # Переменные
-        self.supply_id_var = tk.StringVar()
+        self.order_number_var = tk.StringVar()
         self.zip_path_var = tk.StringVar()
         self.auto_print_var = tk.BooleanVar(value=False)
         self.printer_name_var = tk.StringVar(value=Config.DEFAULT_PRINTER)
@@ -79,19 +79,28 @@ class OzonBarcodeGUI:
         title_label.grid(row=0, column=0, pady=(0, 20))
 
         # Фрейм ввода данных
-        input_frame = ttk.LabelFrame(main_frame, text="Данные поставки", padding="10")
+        input_frame = ttk.LabelFrame(main_frame, text="Данные заказа", padding="10")
         input_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
         input_frame.columnconfigure(1, weight=1)
 
-        # ID поставки
-        ttk.Label(input_frame, text="ID поставки:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        supply_id_entry = ttk.Entry(input_frame, textvariable=self.supply_id_var, width=30)
-        supply_id_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
+        # Номер заказа
+        ttk.Label(input_frame, text="Номер заказа:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        order_number_entry = ttk.Entry(input_frame, textvariable=self.order_number_var, width=30)
+        order_number_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
+
+        # Подсказка
+        hint_label = ttk.Label(
+            input_frame,
+            text="(например: 2000038642317)",
+            font=("Arial", 8),
+            foreground="gray"
+        )
+        hint_label.grid(row=0, column=2, sticky=tk.W, padx=(5, 0))
 
         # ZIP архив
         ttk.Label(input_frame, text="ZIP архив:").grid(row=1, column=0, sticky=tk.W, pady=5)
         zip_frame = ttk.Frame(input_frame)
-        zip_frame.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
+        zip_frame.grid(row=1, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
         zip_frame.columnconfigure(0, weight=1)
 
         zip_entry = ttk.Entry(zip_frame, textvariable=self.zip_path_var)
@@ -126,7 +135,7 @@ class OzonBarcodeGUI:
 
         self.process_btn = ttk.Button(
             button_frame,
-            text="Обработать поставку",
+            text="Обработать заказ",
             command=self.process_supply,
             style='Accent.TButton'
         )
@@ -229,15 +238,11 @@ class OzonBarcodeGUI:
 
     def validate_inputs(self) -> bool:
         """Проверить корректность введенных данных"""
-        supply_id = self.supply_id_var.get().strip()
+        order_number = self.order_number_var.get().strip()
         zip_path = self.zip_path_var.get().strip()
 
-        if not supply_id:
-            messagebox.showerror("Ошибка", "Введите ID поставки")
-            return False
-
-        if not supply_id.isdigit():
-            messagebox.showerror("Ошибка", "ID поставки должен быть числом")
+        if not order_number:
+            messagebox.showerror("Ошибка", "Введите номер заказа")
             return False
 
         if not zip_path:
@@ -266,7 +271,7 @@ class OzonBarcodeGUI:
             self.status_var.set("Готов к работе")
 
     def process_supply(self):
-        """Обработать поставку"""
+        """Обработать заказ"""
         if not self.validate_inputs():
             return
 
@@ -276,35 +281,36 @@ class OzonBarcodeGUI:
         thread.start()
 
     def _process_supply_thread(self):
-        """Поток обработки поставки"""
+        """Поток обработки заказа"""
         try:
             self.set_processing(True)
 
-            supply_id = int(self.supply_id_var.get().strip())
+            order_number = self.order_number_var.get().strip()
             zip_path = self.zip_path_var.get().strip()
             auto_print = self.auto_print_var.get()
             printer_name = self.printer_name_var.get().strip() if auto_print else None
 
             logger = logging.getLogger(__name__)
-            logger.info(f"Начало обработки поставки {supply_id}")
+            logger.info(f"Начало обработки заказа {order_number}")
 
-            # API
+            # API - полный цикл: list -> get -> bundle
             api = OzonAPI()
-            items = api.get_supply_items(supply_id)
+            supply_data = api.get_supply_items_by_order_number(order_number)
 
-            if not items:
-                messagebox.showerror("Ошибка", "Поставка не содержит товаров")
+            if not supply_data or not supply_data.get('items'):
+                messagebox.showerror("Ошибка", "Заказ не содержит товаров")
                 return
 
+            items = supply_data['items']
+
             # Статистика
-            stats = api.get_supply_statistics(supply_id)
-            logger.info(f"Уникальных товаров: {stats['unique_items']}")
-            logger.info(f"Всего к печати: {stats['total_quantity']}")
+            logger.info(f"Уникальных товаров: {supply_data['total_unique']}")
+            logger.info(f"Всего к печати: {supply_data['total_quantity']}")
 
             # PDF обработка
             with PDFProcessor() as processor:
                 pdf_dir = processor.extract_zip(zip_path)
-                output_path = Config.get_output_filepath(supply_id)
+                output_path = Config.get_output_filepath(order_number)
                 merge_stats = processor.merge_pdfs(items, pdf_dir, output_path)
 
                 logger.info(f"Создано страниц: {merge_stats['total_pages']}")
@@ -373,7 +379,7 @@ class OzonBarcodeGUI:
 
     def clear_form(self):
         """Очистить форму"""
-        self.supply_id_var.set("")
+        self.order_number_var.set("")
         self.zip_path_var.set("")
         self.auto_print_var.set(False)
         self.printer_name_var.set(Config.DEFAULT_PRINTER)

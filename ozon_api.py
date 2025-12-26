@@ -95,60 +95,148 @@ class OzonAPI:
             logger.error(error_msg)
             raise OzonAPIError(error_msg)
 
-    def get_supply_bundle(self, supply_id: int) -> Dict:
+    def search_supply_orders(self, order_number: str) -> List[int]:
         """
-        Получить данные о поставке
+        Поиск заявок на поставку по номеру заказа
 
         Args:
-            supply_id: ID поставки
+            order_number: Номер заказа (например, "2000038642317")
 
         Returns:
-            Словарь с данными о поставке
+            Список ID заявок на поставку
 
         Raises:
             OzonAPIError: При ошибке получения данных
         """
-        logger.info(f"Получение данных поставки {supply_id}")
+        logger.info(f"Поиск заявок на поставку по номеру {order_number}")
 
-        endpoint = '/v1/supply-order/bundle'
-        data = {'supply_id': supply_id}
+        endpoint = '/v3/supply-order/list'
+        data = {
+            'filter': {
+                'order_number_search': order_number,
+                'states': ['READY_TO_SUPPLY']
+            },
+            'last_id': '',
+            'limit': 100,
+            'sort_by': 'ORDER_CREATION',
+            'sort_dir': 'DESC'
+        }
 
         try:
             result = self._make_request('POST', endpoint, data)
 
-            if 'result' not in result:
-                raise OzonAPIError("Неверный формат ответа от API")
+            # API возвращает order_ids напрямую, а не массив orders
+            if 'order_ids' in result:
+                # Прямой формат
+                order_ids = result['order_ids']
+            elif 'result' in result and 'order_ids' in result['result']:
+                # Формат с result wrapper
+                order_ids = result['result']['order_ids']
+            else:
+                logger.error(f"Неожиданный формат ответа API: {result}")
+                raise OzonAPIError(f"Неверный формат ответа от API. Получены ключи: {list(result.keys())}")
 
-            return result['result']
+            if not order_ids:
+                logger.warning(f"Не найдено заявок на поставку с номером {order_number}")
+                return []
+
+            logger.info(f"Найдено {len(order_ids)} заявок на поставку: {order_ids}")
+
+            return order_ids
 
         except OzonAPIError:
             raise
         except Exception as e:
-            error_msg = f"Неожиданная ошибка при получении данных поставки: {str(e)}"
+            error_msg = f"Неожиданная ошибка при поиске заявок: {str(e)}"
             logger.error(error_msg)
             raise OzonAPIError(error_msg)
 
-    def get_supply_items(self, supply_id: int) -> List[Dict]:
+    def get_supply_order_details(self, order_ids: List[int]) -> List[Dict]:
         """
-        Получить список товаров в поставке
+        Получить детальную информацию о заявках на поставку
 
         Args:
-            supply_id: ID поставки
+            order_ids: Список ID заявок на поставку
 
         Returns:
-            Список товаров с информацией о SKU, штрихкоде, названии и количестве
+            Список заявок с полной информацией (bundle_ids, warehouse_ids и т.д.)
 
         Raises:
             OzonAPIError: При ошибке получения данных
         """
+        logger.info(f"Получение информации о заявках: {order_ids}")
+
+        endpoint = '/v3/supply-order/get'
+        data = {'order_ids': order_ids}
+
         try:
-            bundle_data = self.get_supply_bundle(supply_id)
+            result = self._make_request('POST', endpoint, data)
 
-            if 'items' not in bundle_data:
-                raise OzonAPIError("В ответе API отсутствует список товаров")
+            # Проверяем возможные форматы ответа
+            if 'result' in result and 'orders' in result['result']:
+                orders = result['result']['orders']
+            elif 'orders' in result:
+                orders = result['orders']
+            else:
+                logger.error(f"Неожиданный формат ответа API: {result}")
+                raise OzonAPIError(f"Неверный формат ответа от API: отсутствует поле 'orders'. Получены ключи: {list(result.keys())}")
 
-            items = bundle_data['items']
-            logger.info(f"Получено {len(items)} уникальных товаров в поставке")
+            logger.info(f"Получена информация о {len(orders)} заявках")
+
+            return orders
+
+        except OzonAPIError:
+            raise
+        except Exception as e:
+            error_msg = f"Неожиданная ошибка при получении информации о заявках: {str(e)}"
+            logger.error(error_msg)
+            raise OzonAPIError(error_msg)
+
+    def get_bundle_items(self, bundle_ids: List[str], dropoff_warehouse_id: int,
+                        storage_warehouse_ids: List[int]) -> List[Dict]:
+        """
+        Получить состав поставки (список товаров)
+
+        Args:
+            bundle_ids: Список ID bundle
+            dropoff_warehouse_id: ID склада отгрузки
+            storage_warehouse_ids: Список ID складов хранения
+
+        Returns:
+            Список товаров с информацией о SKU, названии, количестве и т.д.
+
+        Raises:
+            OzonAPIError: При ошибке получения данных
+        """
+        logger.info(f"Получение состава поставки для bundle_ids: {bundle_ids}")
+
+        endpoint = '/v1/supply-order/bundle'
+        data = {
+            'bundle_ids': bundle_ids,
+            'is_asc': True,
+            'item_tags_calculation': {
+                'dropoff_warehouse_id': dropoff_warehouse_id,
+                'storage_warehouse_ids': storage_warehouse_ids
+            },
+            'last_id': '',
+            'limit': 100,
+            'query': '',
+            'sort_field': 'UNSPECIFIED'
+        }
+
+        try:
+            result = self._make_request('POST', endpoint, data)
+
+            # Проверяем возможные форматы ответа
+            if 'result' in result and 'items' in result['result']:
+                items = result['result']['items']
+            elif 'items' in result:
+                items = result['items']
+            else:
+                logger.error(f"Неожиданный формат ответа API: {result}")
+                raise OzonAPIError(f"Неверный формат ответа от API: отсутствует поле 'items'. Получены ключи: {list(result.keys())}")
+
+            logger.info(f"Получено {len(items)} уникальных товаров")
 
             # Подсчитываем общее количество товаров
             total_quantity = sum(item.get('quantity', 0) for item in items)
@@ -159,43 +247,125 @@ class OzonAPI:
         except OzonAPIError:
             raise
         except Exception as e:
-            error_msg = f"Ошибка при обработке списка товаров: {str(e)}"
+            error_msg = f"Неожиданная ошибка при получении состава поставки: {str(e)}"
             logger.error(error_msg)
             raise OzonAPIError(error_msg)
 
-    def get_supply_statistics(self, supply_id: int) -> Dict:
+    def get_supply_items_by_order_number(self, order_number: str) -> Dict:
         """
-        Получить статистику по поставке
+        Получить список товаров в поставке по номеру заказа (основной метод)
+
+        Выполняет полный цикл запросов:
+        1. Поиск заявок на поставку по номеру заказа
+        2. Получение детальной информации о заявках
+        3. Получение состава поставки (списка товаров)
 
         Args:
-            supply_id: ID поставки
+            order_number: Номер заказа (например, "2000038642317")
 
         Returns:
-            Словарь со статистикой поставки
-        """
-        try:
-            items = self.get_supply_items(supply_id)
-
-            total_unique = len(items)
-            total_quantity = sum(item.get('quantity', 0) for item in items)
-
-            stats = {
-                'supply_id': supply_id,
-                'unique_items': total_unique,
-                'total_quantity': total_quantity,
-                'items': items
+            Словарь с информацией о поставке:
+            {
+                'order_number': str,
+                'order_ids': List[int],
+                'items': List[Dict],
+                'total_unique': int,
+                'total_quantity': int
             }
 
-            logger.info(f"Статистика поставки {supply_id}: "
-                       f"{total_unique} уникальных товаров, "
-                       f"{total_quantity} штук всего")
+        Raises:
+            OzonAPIError: При ошибке получения данных
+        """
+        logger.info(f"Начало обработки заказа {order_number}")
 
-            return stats
+        try:
+            # Шаг 1: Поиск заявок на поставку
+            order_ids = self.search_supply_orders(order_number)
+
+            if not order_ids:
+                raise OzonAPIError(f"Не найдено ни одной заявки на поставку с номером {order_number}")
+
+            # Шаг 2: Получение детальной информации о заявках
+            orders = self.get_supply_order_details(order_ids)
+
+            if not orders:
+                raise OzonAPIError(f"Не удалось получить информацию о заявках {order_ids}")
+
+            # Извлекаем bundle_ids и warehouse информацию из первого заказа
+            # (в большинстве случаев будет один заказ, но может быть несколько)
+            all_items = []
+
+            for order in orders:
+                # Логируем полную структуру заказа для отладки
+                logger.info(f"Структура заказа: {list(order.keys())}")
+
+                # Проверяем наличие supplies
+                if 'supplies' not in order or not order['supplies']:
+                    logger.warning(f"В заказе {order.get('order_id')} отсутствует поле 'supplies'")
+                    continue
+
+                # Получаем warehouse информацию из заказа
+                dropoff_warehouse_id = None
+                if 'drop_off_warehouse' in order:
+                    # Используем warehouse_id, а не id
+                    dropoff_warehouse_id = order['drop_off_warehouse'].get('warehouse_id')
+
+                # Обрабатываем каждую поставку в supplies
+                for supply in order['supplies']:
+                    # Извлекаем bundle_id из поставки
+                    if 'bundle_id' not in supply:
+                        logger.warning(f"В supply отсутствует bundle_id")
+                        continue
+
+                    bundle_id = supply['bundle_id']
+                    bundle_ids = [bundle_id]  # API ожидает массив
+
+                    # Получаем warehouse_id из storage_warehouse
+                    storage_warehouse_ids = []
+                    if 'storage_warehouse' in supply and 'warehouse_id' in supply['storage_warehouse']:
+                        warehouse_id = supply['storage_warehouse']['warehouse_id']
+                        storage_warehouse_ids = [warehouse_id]
+
+                    # Проверка наличия необходимых данных
+                    if not dropoff_warehouse_id:
+                        logger.warning(f"Отсутствует dropoff_warehouse_id")
+                        continue
+
+                    if not storage_warehouse_ids:
+                        logger.warning(f"Отсутствует storage_warehouse_id")
+                        continue
+
+                    logger.info(f"Обработка bundle_id: {bundle_id}")
+                    logger.info(f"Dropoff warehouse: {dropoff_warehouse_id}")
+                    logger.info(f"Storage warehouses: {storage_warehouse_ids}")
+
+                    # Шаг 3: Получение состава поставки
+                    items = self.get_bundle_items(bundle_ids, dropoff_warehouse_id, storage_warehouse_ids)
+                    all_items.extend(items)
+
+            if not all_items:
+                raise OzonAPIError(f"Не удалось получить товары для заказа {order_number}")
+
+            # Формируем итоговый результат
+            total_unique = len(all_items)
+            total_quantity = sum(item.get('quantity', 0) for item in all_items)
+
+            result = {
+                'order_number': order_number,
+                'order_ids': order_ids,
+                'items': all_items,
+                'total_unique': total_unique,
+                'total_quantity': total_quantity
+            }
+
+            logger.info(f"Обработка завершена: {total_unique} уникальных товаров, {total_quantity} штук всего")
+
+            return result
 
         except OzonAPIError:
             raise
         except Exception as e:
-            error_msg = f"Ошибка при получении статистики: {str(e)}"
+            error_msg = f"Неожиданная ошибка при обработке заказа {order_number}: {str(e)}"
             logger.error(error_msg)
             raise OzonAPIError(error_msg)
 
@@ -207,13 +377,16 @@ class OzonAPI:
             True если credentials корректны, False иначе
         """
         try:
-            # Пробуем получить список поставок (любой endpoint для проверки)
-            endpoint = '/v1/supply-order/list'
+            # Пробуем получить список поставок для проверки
+            endpoint = '/v3/supply-order/list'
             data = {
-                'dir': 'ASC',
-                'filter': {},
+                'filter': {
+                    'states': ['READY_TO_SUPPLY']
+                },
+                'last_id': '',
                 'limit': 1,
-                'offset': 0
+                'sort_by': 'ORDER_CREATION',
+                'sort_dir': 'DESC'
             }
 
             self._make_request('POST', endpoint, data)

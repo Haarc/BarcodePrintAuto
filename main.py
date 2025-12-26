@@ -13,16 +13,16 @@ from pdf_processor import PDFProcessor, PDFProcessorError
 
 
 def process_supply(
-    supply_id: int,
+    order_number: str,
     zip_path: str,
     auto_print: bool = False,
     printer_name: Optional[str] = None
 ) -> bool:
     """
-    Обработать поставку: получить данные из API и создать PDF
+    Обработать заказ: получить данные из API и создать PDF
 
     Args:
-        supply_id: ID поставки
+        order_number: Номер заказа (например, "2000038642317")
         zip_path: Путь к ZIP архиву со штрихкодами
         auto_print: Автоматически отправить на печать
         printer_name: Имя принтера (опционально)
@@ -31,23 +31,24 @@ def process_supply(
         True если обработка успешна, False иначе
     """
     try:
-        logger.info(f"Начало обработки поставки {supply_id}")
+        logger.info(f"Начало обработки заказа {order_number}")
 
         # Инициализация API клиента
         logger.info("Подключение к Ozon API...")
         api = OzonAPI()
 
-        # Получение данных о поставке
-        logger.info(f"Получение данных о поставке {supply_id}...")
-        items = api.get_supply_items(supply_id)
+        # Получение данных о заказе (полный цикл: list -> get -> bundle)
+        logger.info(f"Получение данных о заказе {order_number}...")
+        supply_data = api.get_supply_items_by_order_number(order_number)
 
-        if not items:
-            logger.error("Поставка не содержит товаров")
+        if not supply_data or not supply_data.get('items'):
+            logger.error("Заказ не содержит товаров")
             return False
 
+        items = supply_data['items']
+
         # Вывод статистики
-        stats = api.get_supply_statistics(supply_id)
-        print_statistics(stats)
+        print_statistics(supply_data)
 
         # Обработка PDF
         with PDFProcessor() as processor:
@@ -56,7 +57,7 @@ def process_supply(
             pdf_dir = processor.extract_zip(zip_path)
 
             # Объединение PDF файлов
-            output_path = Config.get_output_filepath(supply_id)
+            output_path = Config.get_output_filepath(order_number)
             logger.info("Объединение PDF файлов...")
 
             merge_stats = processor.merge_pdfs(items, pdf_dir, output_path)
@@ -89,19 +90,20 @@ def process_supply(
         return False
 
 
-def print_statistics(stats: dict):
-    """Вывести статистику поставки"""
+def print_statistics(supply_data: dict):
+    """Вывести статистику заказа"""
     print("\n" + "=" * 60)
-    print(f"СТАТИСТИКА ПОСТАВКИ {stats['supply_id']}")
+    print(f"СТАТИСТИКА ЗАКАЗА {supply_data['order_number']}")
     print("=" * 60)
-    print(f"Уникальных товаров: {stats['unique_items']}")
-    print(f"Всего к печати: {stats['total_quantity']} штук")
-    print("\nСостав поставки:")
+    print(f"ID заявок: {supply_data['order_ids']}")
+    print(f"Уникальных товаров: {supply_data['total_unique']}")
+    print(f"Всего к печати: {supply_data['total_quantity']} штук")
+    print("\nСостав заказа:")
     print("-" * 60)
 
-    for i, item in enumerate(stats['items'], 1):
+    for i, item in enumerate(supply_data['items'], 1):
         sku = item.get('sku', 'N/A')
-        barcode = item.get('barcode', 'N/A')
+        offer_id = item.get('offer_id', 'N/A')
         name = item.get('name', 'Неизвестный товар')
         quantity = item.get('quantity', 0)
 
@@ -109,7 +111,7 @@ def print_statistics(stats: dict):
         if len(name) > 50:
             name = name[:47] + "..."
 
-        print(f"{i:2d}. {barcode:<15} - {name:<50} ({quantity} шт)")
+        print(f"{i:2d}. SKU {sku:<10} - {name:<50} ({quantity} шт)")
 
     print("=" * 60 + "\n")
 
@@ -157,11 +159,10 @@ def interactive_mode():
 
     # Ввод данных
     try:
-        supply_id = input("Введите ID поставки: ").strip()
-        if not supply_id.isdigit():
-            print("✗ ID поставки должен быть числом")
+        order_number = input("Введите номер заказа (например, 2000038642317): ").strip()
+        if not order_number:
+            print("✗ Номер заказа не может быть пустым")
             return False
-        supply_id = int(supply_id)
 
         zip_path = input("Укажите путь к ZIP архиву: ").strip()
         if not Path(zip_path).exists():
@@ -177,7 +178,7 @@ def interactive_mode():
                 printer_name = printer
 
         # Обработка
-        return process_supply(supply_id, zip_path, auto_print, printer_name)
+        return process_supply(order_number, zip_path, auto_print, printer_name)
 
     except KeyboardInterrupt:
         print("\n\nПрервано пользователем")
@@ -200,20 +201,20 @@ def main():
     python main.py
 
   С параметрами:
-    python main.py --supply-id 2000038461552 --zip-path barcode.zip
+    python main.py --order-number 2000038642317 --zip-path barcode.zip
 
   С автоматической печатью:
-    python main.py --supply-id 2000038461552 --zip-path barcode.zip --print
+    python main.py --order-number 2000038642317 --zip-path barcode.zip --print
 
   Указать принтер:
-    python main.py --supply-id 2000038461552 --zip-path barcode.zip --print --printer "Мой принтер"
+    python main.py --order-number 2000038642317 --zip-path barcode.zip --print --printer "Мой принтер"
         """
     )
 
     parser.add_argument(
-        '--supply-id',
-        type=int,
-        help='ID поставки Ozon'
+        '--order-number',
+        type=str,
+        help='Номер заказа Ozon (например, 2000038642317)'
     )
 
     parser.add_argument(
@@ -269,9 +270,9 @@ def main():
             return 1
 
     # Режим с параметрами
-    if args.supply_id and args.zip_path:
+    if args.order_number and args.zip_path:
         success = process_supply(
-            args.supply_id,
+            args.order_number,
             args.zip_path,
             args.print,
             args.printer
@@ -279,13 +280,13 @@ def main():
         return 0 if success else 1
 
     # Интерактивный режим
-    if not args.supply_id and not args.zip_path:
+    if not args.order_number and not args.zip_path:
         success = interactive_mode()
         return 0 if success else 1
 
     # Неполные параметры
     parser.print_help()
-    print("\n✗ Ошибка: Укажите либо оба параметра (--supply-id и --zip-path), либо запустите без параметров для интерактивного режима")
+    print("\n✗ Ошибка: Укажите либо оба параметра (--order-number и --zip-path), либо запустите без параметров для интерактивного режима")
     return 1
 
 

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__postman__getWorkspaces",
+      "mcp__postman__getCollections",
+      "mcp__postman__getCollection",
+      "mcp__postman__getCollectionRequest"
+    ]
+  }
+}

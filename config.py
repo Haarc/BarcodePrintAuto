@@ -51,9 +51,9 @@ class Config:
         return cls.LOGS_DIR / f'ozon_automation_{date_str}.log'
 
     @classmethod
-    def get_output_filepath(cls, supply_id, suffix='полная'):
+    def get_output_filepath(cls, order_number, suffix='полная'):
         """Получить путь к выходному PDF файлу"""
-        return cls.OUTPUT_DIR / f'Поставка_{supply_id}_{suffix}.pdf'
+        return cls.OUTPUT_DIR / f'Заказ_{order_number}_{suffix}.pdf'
 
 
 def setup_logging():
